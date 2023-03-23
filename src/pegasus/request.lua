@@ -118,10 +118,66 @@ function Request:parseUrlEncoded(data)
   return output
 end
 
+function Request:parseMultipartFormData(data)
+  local boundary = self:headers()["content-type"]:match("multipart/form%-data;%s+boundary=([^,]+)")
+
+  local output = {}
+
+  while true do
+    data = data:sub(data:find("--" .. boundary) + 2 + #boundary)
+    
+    if data:match("^--%s+$") then
+      break
+    end
+    
+    local name, filename, filetype
+    
+    local metadataHeaders = data:sub(1, data:find("\r\n\r\n", 5) + 1)
+    for line in metadataHeaders:gmatch("([^\r]+)\r\n") do
+      local key, value = line:match(Request.PATTERN_HEADER)
+      if not key then
+        break
+      elseif key:lower() == "content-disposition" then
+        -- TODO: secure?
+        name = value:match("; name=\"([^\"]+)\"")
+        filename = value:match("; filename=\"([^\"]+)\"")
+      elseif key:lower() == "content-type" then
+        filetype = value
+      end
+    end
+    
+    local itemdata = data:sub(data:find"\r\n\r\n" + 4, data:find("\r\n--" .. boundary) - 1)
+    
+    if filename then
+      -- Files *must* have a type, else this ignores them
+      if filetype then
+        output[name] = {
+          data = itemdata,
+          filename = filename,
+          type = filetype
+        }
+      end
+    else
+      output[name] = itemdata
+    end
+  end
+
+  return output
+end
+
 function Request:post()
   if self:method() ~= 'POST' then return nil end
+  if self._postdata then return self._postdata end
+  
+  local ct = self:headers()["content-type"]
   local data = self:receiveBody()
-  return self:parseUrlEncoded(data)
+  if ct:sub(1, ct:find";") == "multipart/form-data;" then
+    self._postdata = self:parseMultipartFormData(data)
+  else
+    self._postdata = self:parseUrlEncoded(data)
+  end
+  
+  return self._postdata
 end
 
 function Request:path()
